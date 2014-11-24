@@ -1,0 +1,105 @@
+---
+- name: mydrupalproject deployment
+  hosts: all
+  sudo: True
+  remote_user: '{{ ssh_user }}'
+  port: '{{ ssh_port }}' 
+  vars:
+    - ssh_user: ubuntu
+    - ssh_port: 22
+    - site_domain: example.example.com
+    - site_repo: ssh://git@example.com:7999/foo/mydrupalproject.git 
+    - db_host: db01
+    - db_user: dbuser 
+    - db_pass: dbuserpass
+    - db_name: mydrupalproject_dev 
+    - dns_zone: example.com
+    - cname_value: web01.example.com
+
+  tasks:
+  - name: Install nginx & php
+    apt: pkg={{ item }} state=installed
+    with_items:
+      - php5-fpm
+      - php5-cli
+      - php5-gd
+      - php5-mysqlnd
+      - php5-xdebug
+      - php-apc
+      - python
+      - python-boto
+
+  - name: Ensure python-mysqldb is installed
+    apt: name=python-mysqldb state=present
+
+  - name: Add nginx host file
+    template:
+      src: "templates/site.conf.j2"
+      dest: "/etc/nginx/sites-available/{{ site_domain }}"
+      owner: root
+      group: root
+      mode: 0644
+    notify: restart nginx
+
+  - name: Symlink host file to sites-enabled
+    file:
+      src: "/etc/nginx/sites-available/{{ site_domain }}"
+      dest: "/etc/nginx/sites-enabled/{{ site_domain }}"
+      state: link
+    notify: restart nginx
+
+  - name: roll out new code
+    action: git repo={{ site_repo }} dest=/data/web/{{ site_domain }} version=HEAD accept_hostkey=True
+    sudo: False
+
+  - name: Add drupal settings file
+    template:
+      src: "templates/settings.php.j2"
+      dest: "/data/web/{{ site_domain }}/public/sites/default/settings.php"
+      owner: ubuntu
+      group: ubuntu
+      mode: 0644
+
+  - name: Copy db file to remote host
+    copy: src=files/farallon.sql dest=/tmp
+
+  - name: Drop database if it exists
+    mysql_db:
+      name: '{{ db_name }}'
+      login_host: '{{ db_host }}'
+      login_user: '{{ db_user }}'
+      login_password: '{{ db_pass }}'
+      state: absent 
+
+  - name: Create database
+    mysql_db:
+      name: '{{ db_name }}'
+      login_host: '{{ db_host }}'
+      login_user: '{{ db_user }}'
+      login_password: '{{ db_pass }}'
+      state: present 
+
+  - name: Import database 
+    mysql_db:
+      name: '{{ db_name }}'
+      login_host: '{{ db_host }}'
+      login_user: '{{ db_user }}'
+      login_password: '{{ db_pass }}'
+      state: import
+      target: /tmp/farallon.sql
+
+  - name: Add DNS record
+    route53:
+      command: create
+      zone: '{{ dns_zone }}' 
+      record: '{{ site_domain }}'
+      type: CNAME
+      ttl: 7200
+      value: '{{ cname_value }}'
+      aws_access_key: ABCDEFGHIJKLMNOP
+      aws_secret_key: QRSTUVWXYZ
+
+  handlers:
+    - name: restart nginx
+      action: service name=nginx state=restarted
+

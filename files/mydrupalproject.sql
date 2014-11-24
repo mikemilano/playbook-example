@@ -1,0 +1,2 @@
+-- base sql file would be here
+-- ideally, you would have a profile though and run drush commands to install it
